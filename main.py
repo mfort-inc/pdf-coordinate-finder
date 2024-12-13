@@ -16,15 +16,22 @@ class PDFDisplay:
         self._page = 0
         self._length = len(self._pdf)
         self._img_paths: list[str] = []
+        self._img_height = 0  # 이미지 높이를 저장할 변수 추가
         self._display()
 
     def _display(self) -> None:
         img_path = f"pdfcf_page_{self._page}.png"
         if img_path not in self._img_paths:
-            self._pdf[self._page].get_pixmap().save(img_path)
+            pix = self._pdf[self._page].get_pixmap()
+            pix.save(img_path)
             self._img_paths.append(img_path)
 
-        cv2.imshow(self.window_name, cv2.imread(img_path, 1))
+        image = cv2.imread(img_path, 1)
+        if image is not None:
+            self._img_height = image.shape[0]  # 이미지 높이 저장
+            cv2.imshow(self.window_name, image)
+        else:
+            print(f"Failed to load image: {img_path}")
 
     def move_pages(self, amount: int) -> None:
         self._page = (self._page + amount) % self._length
@@ -33,7 +40,8 @@ class PDFDisplay:
     def teardown(self) -> None:
         cv2.destroyAllWindows()
         for path in self._img_paths:
-            os.remove(path)
+            if os.path.exists(path):
+                os.remove(path)
 
     @property
     def window_name(self) -> str:
@@ -46,7 +54,7 @@ class PDFDisplay:
 
 def prettify_coords(
         obj: dict[int, dict[str, tuple[int, int]]] | dict[int, list[tuple[int, int]]]
-    ) -> str:
+) -> str:
     ind = " " * 4
     lines = ["{"]
     for k, v in obj.items():
@@ -89,7 +97,7 @@ class Coordinates:
         if output_path is not None:
             with open(output_path, "w") as file:
                 file.write(output)
-            print(f"Results written to '{output_path}")
+            print(f"Results written to '{output_path}'")
         else:
             print(f"\nResults:\n\n{output}\n")
 
@@ -103,7 +111,7 @@ def collect_coordinates(pdf_path: str, adjustment: int, get_label: bool) -> Coor
         "\tX:          collect, but keep previous x value\n",
         "\tY:          collect, but keep previous y value\n",
         "\t>:          next pdf page\n"
-        "\t<:          previous pdf page\n"
+        "\t<:          previous pdf page\n",
         "\tESC:        close the file and print coordinates",
     )
 
@@ -113,36 +121,39 @@ def collect_coordinates(pdf_path: str, adjustment: int, get_label: bool) -> Coor
     _y = 0
 
     def mouse_callback(event: int, x: int, y: int, flags: int, params: Any | None) -> None:
+        nonlocal _x, _y
         if event == cv2.EVENT_LBUTTONDOWN:
-            coords.append(x + adjustment, y + adjustment, display.page)
+            # Y 좌표 반전
+            y_new = display._img_height - y + adjustment
+            coords.append(x + adjustment, y_new, display.page)
         elif event == cv2.EVENT_MOUSEMOVE:
-            nonlocal _x
-            nonlocal _y
             _x = x
             _y = y
 
     cv2.setMouseCallback(display.window_name, mouse_callback)
 
     while True:
-        match cv2.waitKey(1):
-            case 27:  # ESC
+        key = cv2.waitKey(1)
+        if key == 27:  # ESC
+            break
+        elif key in (ord('x'), ord('X')):
+            prev_x = coords.prev[0] if coords.coords else _x + adjustment
+            y_new = display._img_height - _y + adjustment
+            coords.append(prev_x, y_new, display.page)
+        elif key in (ord('y'), ord('Y')):
+            prev_y = coords.prev[1] if coords.coords else _y + adjustment
+            coords.append(_x + adjustment, prev_y, display.page)
+        elif key in (ord('<'), ord(',')):
+            display.move_pages(-1)
+        elif key in (ord('>'), ord('.')):
+            display.move_pages(1)
+        else:
+            if cv2.getWindowProperty(display.window_name, cv2.WND_PROP_VISIBLE) < 1:
                 break
-            case 120 | 88:  # 'x', 'X'
-                prev_x = coords.prev[0] if len(coords.coords) else _x + adjustment
-                coords.append(prev_x, _y + adjustment, display.page)
-            case 121 | 89:  # 'y', 'Y'
-                prev_y = coords.prev[1] if len(coords.coords) else _y + adjustment
-                coords.append(_x + adjustment, prev_y, display.page)
-            case 60 | 44:  # '<', ','
-                display.move_pages(-1)
-            case 62 | 46:  # '>', '.'
-                display.move_pages(1)
-            case _:
-                if cv2.getWindowProperty(display.window_name, cv2.WND_PROP_VISIBLE) < 1:
-                    break
 
     display.teardown()
     return coords
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
